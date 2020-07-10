@@ -1,0 +1,165 @@
+---
+title: "script"
+author: "Prisma E. Lopez J."
+date: "7/10/2020"
+output: html_document
+---
+
+```{r}
+# Here, I access an RNA-seq count table and pheno data referenced in the R-Bioinformatics-Cookbook (2019 Packt Publishing). 
+
+# To the script provided by the R Bioinformatics Cookbook Reference, I append code for edgeR package based filtering and normalization procedures
+
+
+# 1: Create a count matrix with 9 samples and 14k+ Flybase genes && group the samples based on fly larvae stage
+# 2: Collect the grouping variables and the count matrix into a DGEList object required for edgeR
+# 3: Apply filterByExpr(), and calcNormFactors() to filter and normalize the dataset respectively.
+# 4: Create a model `design` vector for application (w/ the DGEList object) in the i) glmQLFit() "model fitting" and ii) glmQLFTest() "model testing" 
+# iii) Save the `result` "model test" vector into a statistical summary `res` vector
+# 5: Append ENTREZID, gene symbols, and names to `res` object
+
+# The focus of this assignment was to establish code for conventional differential expression assessments using edgeR 
+
+```
+
+```{r Load your workspace}
+library(readr)
+library(limma)
+library(GO.db)
+library(org.Dm.eg.db)
+library(AnnotationDbi)
+library(annotation)
+library(magrittr)
+library(edgeR)
+```
+
+```{r 1 Load the count data, pheno data, assign samples to experimental groups, and create a count data and DGEList object}
+
+#### Load the count data
+count_dataframe <- readr::read_tsv(file.path(getwd(),"datasets","Chapter01","modencodefly_count_table.txt")) # (data frame) Flybase genes count data for each sample
+genes <- count_dataframe[['gene']] # (vector: characters) flybase gene symbols
+count_dataframe[['gene']] <- NULL # remove the flybase gene row names
+count_matrix <- as.matrix(count_dataframe) # (matrix:numerical) of gene counts
+rownames(count_matrix) <- genes # (matrix) with gene names and counts
+
+#### Load the pheno data
+pheno_data <- read_table2(file.path(getwd(),"datasets","Chapter01","modencodefly_phenodata.txt")) # (data frame) with sample ID, # replicates, and fly embryo stage
+
+#### Specify experiments of interest:
+experiments_of_interest <- c("L1Larvae","L2Larvae") # (vector) with 2 experimental stages
+columns_of_interest <- which(pheno_data[['stage']] %in% experiments_of_interest) # (vector) with 9 numbers(?): select those embryos in L1 or L2 larvae stage
+
+#### Form the grouping factor:
+grouping <- pheno_data[['stage']][columns_of_interest] %>% forcats::as_factor() # (vector) with 9 sample label:  group the embryos by their stage as a vector with embryo stage labels
+
+#### Form the subset of count data:
+counts_of_interest <- count_matrix[,columns_of_interest] # (matrix) with: 9 samples, 14k+ FBGn
+
+```{r 2 Collect the grouping variables and the count matrix into a DGEList object required for edgeR}
+#### Create the DGE List object
+count_dge <- DGEList(counts=counts_of_interest,group=grouping) # (list) first item is the count data
+```
+
+```{r 3 preliminary filtering and normalization}
+keep=filterByExpr(count_dge) # (vector) with flybase genes assigned to either true or false based on whether they have large coutns to be retained in a statistical analysis
+count_dge_filt=count_dge[keep,,keep.lib.sizes=FALSE] # (list) `samples`appended to `coutn_dge` list object: filter the count matrix 10111 9
+count_dge_filt_norm=calcNormFactors(count_dge_filt) # (list) Normalization of samples: append to DGE list `samples` item that includes a `norm. factors` column that normalizes gene count values around 1 or a selecte value
+
+design <- model.matrix(~grouping) # (matrix) sample classification
+eset_dge <- estimateDisp(count_dge_filt_norm,design) # (list) provides AveLogCPM and dispersion estimates: suggested step when there are biol. replicates 
+
+```
+
+```{r  4 Differential expression}
+fit <- glmQLFit(eset_dge,design) # (list) Fit a quasi-likelihood negative binomial generalized log-linear model to count data, option: robust=TRUE
+
+
+result<-glmQLFTest(fit,coef=2) # (list) `result` not FDR adj.
+result_df=as.data.frame(result) # (data frame 10111 7) 
+#### alt stat. summarization of `result`:
+res=as.data.frame(topTags(result)) # (data frame 10 8) summary result : logFC, logCPM, F, PValue, FDR adjusted
+
+
+#### alternatively after glmQLFTest:
+tr = glmTreat(fit,lfc=log2(1.5)) # here we test whether the differential expression fold changes are greater than 1.5
+tr_df=as.data.frame(tr)#topTags(tr)
+
+
+is.de=decideTestsDGE(tr)
+summary(is.de)
+```
+
+```{r 5 Append ENTREZID, gene symbols, and names to `res`}
+#### Note, `res` is a summary and includes FDR adjustment
+res$symbol = mapIds(org.Dm.eg.db,
+                    keys=row.names(res),
+                    column="SYMBOL",
+                    keytype="ENSEMBL",
+                    multiVals="first")
+
+res$entrez = mapIds(org.Dm.eg.db,
+                    keys=row.names(res),
+                    column="ENTREZID",
+                    keytype="ENSEMBL",
+                    multiVals="first")
+res$name= mapIds(org.Dm.eg.db,
+                 keys=row.names(res),
+                 column="GENENAME",
+                 keytype="ENSEMBL",
+                 multiVals="first")
+#########################################################
+#### Note, `result_df` is a data frame without FDR Adjustment p-values
+result_df$symbol = mapIds(org.Dm.eg.db,
+                    keys=row.names(result_df),
+                    column="SYMBOL",
+                    keytype="ENSEMBL",
+                    multiVals="first")
+
+result_df$entrez = mapIds(org.Dm.eg.db,
+                    keys=row.names(result_df),
+                    column="ENTREZID",
+                    keytype="ENSEMBL",
+                    multiVals="first")
+result_df$name= mapIds(org.Dm.eg.db,
+                 keys=row.names(result_df),
+                 column="GENENAME",
+                 keytype="ENSEMBL",
+                 multiVals="first")
+#########################################################
+#### Note, `tr_df` is a data frame without FDR Adjustment p-values
+tr_df$symbol = mapIds(org.Dm.eg.db,
+                    keys=row.names(tr_df),
+                    column="SYMBOL",
+                    keytype="ENSEMBL",
+                    multiVals="first")
+
+tr_df$entrez = mapIds(org.Dm.eg.db,
+                    keys=row.names(tr_df),
+                    column="ENTREZID",
+                    keytype="ENSEMBL",
+                    multiVals="first")
+tr_df$name= mapIds(org.Dm.eg.db,
+                 keys=row.names(tr_df),
+                 column="GENENAME",
+                 keytype="ENSEMBL",
+                 multiVals="first")
+
+#write.csv(res,file="res_GO.csv")
+```
+
+```{r 6 Identify top GO terms associated with the entrez column in `tr_df`}
+entz=tr_df$entrez
+go=goana(entz,species="Dm")
+topGO(go,n=15) # top terms
+```
+
+```{r 7 Use the KEGG curated database of molecular pathways}
+#### Collect pahway associations with each entrez gene in the `tr_df` vector
+keg=kegga(tr_df$entrez,species="Dm") # requires internet access
+keg
+```
+
+```{r Summary Comments}
+# Consider FDR adjusting P-values prior to using GO or KEGG 
+
+```
